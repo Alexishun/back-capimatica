@@ -18,7 +18,28 @@ import sys, json, subprocess
 load_dotenv()  # Loads GEMINI_API_KEY from .env if present
 
 MODEL_NAME = "gemini-2.5-flash"
+class PredictionStats(BaseModel):
+    temp_C_mean: float
+    precip_mm_h_mean: float
+    viento_ms_mean: float
+    humedad_mean: float  # 0–1 (kg/kg) o ya en %
 
+class PredictionRequest(BaseModel):
+    fecha_consulta: str
+    tabla: str
+    n_muestras: int
+    prob_lluvia: float
+    prob_calor: float
+    prob_frio: float
+    prob_viento: float
+    prob_muy_humedo: float
+    prob_neblina: float
+    note: Optional[str] = None
+    stats: PredictionStats
+    activity: Optional[str] = Field(None, description="Optional activity to evaluate")
+
+class PredictionResponse(BaseModel):
+    description: str
 # ---------- Prompt ----------
 
 def build_prompt_from_prediction(p: PredictionRequest) -> str:
@@ -176,30 +197,6 @@ def call_gemini(prompt: str) -> str:
 # ---------- FastAPI ----------
 
 app = FastAPI()
-
-class PredictionStats(BaseModel):
-    temp_C_mean: float
-    precip_mm_h_mean: float
-    viento_ms_mean: float
-    humedad_mean: float  # suele venir en kg/kg (0–1). Si ya viene %, lo detectamos.
-
-class PredictionRequest(BaseModel):
-    fecha_consulta: str
-    tabla: str
-    n_muestras: int
-    prob_lluvia: float
-    prob_calor: float
-    prob_frio: float
-    prob_viento: float
-    prob_muy_humedo: float
-    prob_neblina: float
-    note: Optional[str] = None
-    stats: PredictionStats
-    # opcional: actividad que el usuario quiere evaluar (hiking, picnic, etc.)
-    activity: Optional[str] = Field(None, description="Optional activity to evaluate")
-
-class PredictionResponse(BaseModel):
-    description: str
 
 @app.post("/describe", response_model=PredictionResponse, summary="Describe weather and suggest activities from prediction JSON")
 def describe_weather(payload: PredictionRequest):
