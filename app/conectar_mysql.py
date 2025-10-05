@@ -39,8 +39,8 @@ def obtener_datos(tabla="lima_feature", limit=None):
             rows = cursor.fetchall()
             df = pd.DataFrame(rows)
 
-            print(f"\nPrimeras filas de la tabla {tabla}:")
-            print(df.head())
+            # print(f"\nPrimeras filas de la tabla {tabla}:")
+            # print(df.head())
 
             return df
     finally:

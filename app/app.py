@@ -4,11 +4,16 @@
 import os
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,Query
 from pydantic import BaseModel, Field, confloat
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+import math
+import datetime as dt
+
+from pathlib import Path
+import sys, json, subprocess
 
 load_dotenv()  # Loads GEMINI_API_KEY from .env if present
 
@@ -172,6 +177,8 @@ def describe_weather(payload: WeatherRequest):
         return WeatherResponse(description=text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/weather", summary="Get nearest city's weather by lat/lon/date/hour")
 def get_weather(
     lat: float = Query(..., description="Latitude"),
@@ -179,35 +186,27 @@ def get_weather(
     date: str = Query(..., description="Date YYYY-MM-DD (assumed UTC)"),
     hour: int = Query(..., ge=0, le=23, description="Hour 0-23 (assumed UTC)"),
     window_minutes: int = Query(60, ge=0, le=360, description="Time window +/- minutes to search"),
-    agg: str = Query("nearest", pattern="^(nearest|mean)$", description="'nearest' or 'mean' within window"),
 ):
     try:
         city = closest_city(lat, lon)
         table = city["table"]
-        # fecha objetivo en UTC
-        dt = datetime.strptime(f"{date} {hour:02d}:00", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
-        fecha_str = dt.strftime("%Y-%m-%d %H:%M")       # formato que usa tu script
 
-        # prediccion.py usa --rango en HORAS; convertimos desde minutos
-        rango_horas = max(0.1, round(window_minutes / 60.0, 2))
+        dt_utc = dt.datetime.strptime(f"{date} {hour:02d}:00", "%Y-%m-%d %H:%M").replace(tzinfo=dt.timezone.utc)
+        fecha_str = dt_utc.strftime("%Y-%m-%d %H:%M")
 
-        result = run_prediccion(table=table, fecha_str=fecha_str, rango_horas=rango_horas)
+        rango_horas_int = max(1, int(math.ceil(window_minutes / 60)))
 
-        # Puedes anexar metadatos útiles:
+        result = run_prediccion(table=table, fecha_str=fecha_str, rango_horas=rango_horas_int)
+        print(result)
         return {
             "city": city["name"],
             "city_distance_km": city["dist_km"],
             "table": table,
-            "target_dt_utc": dt.isoformat(),
-            "query_params": {
-                "lat": lat, "lon": lon, "date": date, "hour": hour, "window_minutes": window_minutes
-            },
-            "prediction": result,   # ← lo que imprime tu script (prob_lluvia, stats, etc.)
+            "target_dt_utc": dt_utc.isoformat(),
+            "query_params": {"lat": lat, "lon": lon, "date": date, "hour": hour, "window_minutes": window_minutes},
+            "rango_horas": rango_horas_int,
+            "prediction": result,
         }
 
-       
-
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
