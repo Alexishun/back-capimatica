@@ -21,30 +21,60 @@ MODEL_NAME = "gemini-2.5-flash"
 
 # ---------- Prompt ----------
 
-def build_prompt(temp_c: float, feels_c: float, humidity: float,
-                 wind_ms: float, rain_prob: float, uv_index: float,
-                 activity: Optional[str] = None) -> str:
-    activity_hint = f"\nAlso, evaluate suitability specifically for: **{activity}**." if activity else ""
+def build_prompt_from_prediction(p: PredictionRequest) -> str:
+    """
+    Arma un prompt amigable a partir del JSON de prediccion.py.
+    - Convierte humedad a % si viene en 0–1 (kg/kg).
+    - No tenemos UV aquí; no lo pedimos.
+    """
+    temp_c = p.stats.temp_C_mean
+    wind_ms = p.stats.viento_ms_mean
+    precip_mm_h = p.stats.precip_mm_h_mean
+
+    # Si humedad viene en [0..1], pásala a %; si ya es >1, asumimos que ya está en %.
+    humidity_pct = p.stats.humedad_mean * 100 if p.stats.humedad_mean <= 1 else p.stats.humedad_mean
+
+    # Probabilidades a %
+    pr_lluvia   = p.prob_lluvia   * 100
+    pr_calor    = p.prob_calor    * 100
+    pr_frio     = p.prob_frio     * 100
+    pr_viento   = p.prob_viento   * 100
+    pr_muy_hum  = p.prob_muy_humedo * 100
+    pr_neblina  = p.prob_neblina  * 100
+
+    activity_hint = f"\nAlso, evaluate suitability specifically for: **{p.activity}**." if p.activity else ""
+
     return f"""
 Respond in English only.
 
-You are a concise outdoor-planning assistant. Use the numbers below to
-describe the weather in simple, friendly English and suggest activities.
+You are a concise outdoor-planning assistant. Use the aggregated metrics and probabilities below
+to describe the expected weather in simple, friendly language and suggest activities.
 
 Constraints:
 - Be short (120–180 words), structured, and practical.
 - First: a 1–2 sentence overview (comfort, risks).
-- Then: bullet points with tips (clothing, hydration, sunscreen).
+- Then: bullet points with tips (clothing, hydration, sun protection if relevant).
 - Finally: 3 recommended activities and 3 to avoid (with 5–8 word reasons).
-- Use °C, m/s, %, UV as given. No warnings about consulting professionals.{activity_hint}
+- Use °C, m/s, %, mm/h as given. No warnings about consulting professionals.{activity_hint}
 
-Data:
-- Temperature: {temp_c:.1f} °C
-- Feels like:  {feels_c:.1f} °C
-- Humidity:    {humidity:.0f} %
-- Wind:        {wind_ms:.1f} m/s
-- Rain prob.:  {rain_prob:.0f} %
-- UV index:    {uv_index:.1f}
+Context:
+- Query time (UTC): {p.fecha_consulta}
+- Location table: {p.tabla}
+- Samples used: {p.n_muestras}
+
+Aggregates:
+- Temperature (mean): {temp_c:.1f} °C
+- Wind speed (mean): {wind_ms:.1f} m/s
+- Humidity (mean): {humidity_pct:.0f} %
+- Precipitation rate (mean): {precip_mm_h:.3f} mm/h
+
+Event probabilities (0–100%):
+- Rain: {pr_lluvia:.1f}%
+- Heat: {pr_calor:.1f}%
+- Cold: {pr_frio:.1f}%
+- Windy: {pr_viento:.1f}%
+- Very humid: {pr_muy_hum:.1f}%
+- Fog: {pr_neblina:.1f}%
 
 Return only the answer, no preface.
 """.strip()
@@ -57,6 +87,8 @@ CITIES = [
     {"name": "puno",     "lat": -15.8402, "lon": -70.0219, "table": "puno_feature"},
     {"name": "tarapoto", "lat":  -6.4921, "lon": -76.3655, "table": "tarapoto_feature"},
 ]
+
+
 def run_prediccion(table: str, fecha_str: str, rango_horas: float, timeout_s: int = 30) -> dict:
     """
     Ejecuta: py prediccion.py --tabla=<table> --fecha "<YYYY-MM-DD HH:MM>" --rango <horas>
@@ -145,39 +177,42 @@ def call_gemini(prompt: str) -> str:
 
 app = FastAPI()
 
-class WeatherRequest(BaseModel):
-    temp_c: float = Field(..., description="Air temperature in °C")
-    feels_c: float = Field(..., description="Feels-like temperature in °C")
-    humidity: confloat(ge=0, le=100) = Field(..., description="Humidity in % (0-100)")
-    wind_ms: float = Field(..., description="Wind speed in m/s")
-    rain_prob: confloat(ge=0, le=100) = Field(..., description="Rain probability in % (0-100)")
-    uv_index: float = Field(..., description="UV index")
-    activity: Optional[str] = Field(None, description="Optional activity (e.g., hiking, picnic, cycling)")
+class PredictionStats(BaseModel):
+    temp_C_mean: float
+    precip_mm_h_mean: float
+    viento_ms_mean: float
+    humedad_mean: float  # suele venir en kg/kg (0–1). Si ya viene %, lo detectamos.
 
-class WeatherResponse(BaseModel):
+class PredictionRequest(BaseModel):
+    fecha_consulta: str
+    tabla: str
+    n_muestras: int
+    prob_lluvia: float
+    prob_calor: float
+    prob_frio: float
+    prob_viento: float
+    prob_muy_humedo: float
+    prob_neblina: float
+    note: Optional[str] = None
+    stats: PredictionStats
+    # opcional: actividad que el usuario quiere evaluar (hiking, picnic, etc.)
+    activity: Optional[str] = Field(None, description="Optional activity to evaluate")
+
+class PredictionResponse(BaseModel):
     description: str
+
+@app.post("/describe", response_model=PredictionResponse, summary="Describe weather and suggest activities from prediction JSON")
+def describe_weather(payload: PredictionRequest):
+    try:
+        prompt = build_prompt_from_prediction(payload)
+        text = call_gemini(prompt)  # tu función que llama a Gemini
+        return PredictionResponse(description=text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/", summary="Health check")
 def root():
     return {"status": "ok", "service": "Weather Explainer API"}
-
-@app.post("/describe", response_model=WeatherResponse, summary="Describe weather and suggest activities")
-def describe_weather(payload: WeatherRequest):
-    try:
-        prompt = build_prompt(
-            temp_c=payload.temp_c,
-            feels_c=payload.feels_c,
-            humidity=payload.humidity,
-            wind_ms=payload.wind_ms,
-            rain_prob=payload.rain_prob,
-            uv_index=payload.uv_index,
-            activity=payload.activity,
-        )
-        text = call_gemini(prompt)
-        return WeatherResponse(description=text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/weather", summary="Get nearest city's weather by lat/lon/date/hour")
 def get_weather(
