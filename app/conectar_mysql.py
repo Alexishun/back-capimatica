@@ -1,6 +1,8 @@
 import os
 import pymysql
 import pandas as pd
+from dotenv import load_dotenv
+load_dotenv()
 
 def obtener_datos(tabla="lima_feature", limit=None):
     """
@@ -14,12 +16,12 @@ def obtener_datos(tabla="lima_feature", limit=None):
     charset="utf8mb4",
     connect_timeout=timeout,
     cursorclass=pymysql.cursors.DictCursor,
-    db="defaultdb",
-    host="capimatica-mysql-capimatica.d.aivencloud.com",
-    password="AVNS_V33wHPTnvdpr9Lw9HRD",
+    db=os.getenv("DB"),
+    host=os.getenv("HOST"),
+    password=os.getenv("PASSWORD"),
     read_timeout=timeout,
-    port=12284,
-    user="avnadmin",
+    port=os.getenv("PORT"),
+    user=os.getenv("USER"),
     write_timeout=timeout,
     )
     try:
