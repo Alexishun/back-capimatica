@@ -20,7 +20,7 @@ def obtener_datos(tabla="lima_feature", limit=None):
     host=os.getenv("HOST"),
     password=os.getenv("PASSWORD"),
     read_timeout=timeout,
-    port=os.getenv("PORT"),
+    port=12284,
     user=os.getenv("USER"),
     write_timeout=timeout,
     )
